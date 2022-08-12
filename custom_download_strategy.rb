@@ -1,41 +1,5 @@
 require "download_strategy"
 
-# S3DownloadStrategy downloads tarballs from AWS S3.
-# To use it, add `:using => :s3` to the URL section of your
-# formula.  This download strategy uses AWS access tokens (in the
-# environment variables `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY`)
-# to sign the request.  This strategy is good in a corporate setting,
-# because it lets you use a private S3 bucket as a repo for internal
-# distribution.  (It will work for public buckets as well.)
-class S3DownloadStrategy < CurlDownloadStrategy
-  def initialize(url, name, version, **meta)
-    super
-  end
-
-  def _fetch(url:, resolved_url:, timeout:)
-    if url !~ %r{^https?://([^.].*)\.s3\.amazonaws\.com/(.+)$} &&
-       url !~ %r{^s3://([^.].*?)/(.+)$}
-      raise "Bad S3 URL: " + url
-    end
-
-    bucket = Regexp.last_match(1)
-    key = Regexp.last_match(2)
-
-    ENV["AWS_ACCESS_KEY_ID"] = ENV["HOMEBREW_AWS_ACCESS_KEY_ID"]
-    ENV["AWS_SECRET_ACCESS_KEY"] = ENV["HOMEBREW_AWS_SECRET_ACCESS_KEY"]
-
-    begin
-      signer = Aws::S3::Presigner.new
-      s3url = signer.presigned_url :get_object, bucket: bucket, key: key
-    rescue Aws::Sigv4::Errors::MissingCredentialsError
-      ohai "AWS credentials missing, trying public URL instead."
-      s3url = url
-    end
-
-    curl_download s3url, to: temporary_path
-  end
-end
-
 # GitHubPrivateRepositoryDownloadStrategy downloads contents from GitHub
 # Private Repository. To use it, add
 # `:using => :github_private_repo` to the URL section of
@@ -44,7 +8,7 @@ end
 # strategy is suitable for corporate use just like S3DownloadStrategy, because
 # it lets you use a private GitHub repository for internal distribution.  It
 # works with public one, but in that case simply use CurlDownloadStrategy.
-class GitHubPrivateRepositoryDownloadStrategy < CurlDownloadStrategy
+class CustomGitHubPrivateRepositoryDownloadStrategy < CurlDownloadStrategy
   require "utils/formatter"
   require "utils/github"
 
@@ -63,13 +27,13 @@ class GitHubPrivateRepositoryDownloadStrategy < CurlDownloadStrategy
   end
 
   def download_url
-    "https://#{@github_token}@github.com/#{@owner}/#{@repo}/#{@filepath}"
+    "https://github.com/#{@owner}/#{@repo}/#{@filepath}"
   end
 
   private
 
-  def _fetch(url:, resolved_url:, timeout:)
-    curl_download download_url, to: temporary_path
+  def _fetch(url:, resolved_url:)
+    curl_download download_url, "--header", "Authorization: token #{@github_token}", to: temporary_path
   end
 
   def set_github_token
@@ -99,7 +63,9 @@ end
 # Release assets. To use it, add `:using => :github_private_release` to the URL section
 # of your formula. This download strategy uses GitHub access tokens (in the
 # environment variables HOMEBREW_GITHUB_API_TOKEN) to sign the request.
-class GitHubPrivateRepositoryReleaseDownloadStrategy < GitHubPrivateRepositoryDownloadStrategy
+class CustomGitHubPrivateRepositoryReleaseDownloadStrategy < CustomGitHubPrivateRepositoryDownloadStrategy
+  require 'net/http'
+
   def initialize(url, name, version, **meta)
     super
   end
@@ -114,15 +80,26 @@ class GitHubPrivateRepositoryReleaseDownloadStrategy < GitHubPrivateRepositoryDo
   end
 
   def download_url
-    "https://api.github.com/repos/#{@owner}/#{@repo}/releases/assets/#{asset_id}"
+    #"https://#{@github_token}@api.github.com/repos/#{@owner}/#{@repo}/releases/assets/#{asset_id}"
+    #blah = curl_output "--header", "Accept: application/octet-stream", "--header", "Authorization: token #{@github_token}", "-I"
+    uri = URI("https://api.github.com/repos/#{@owner}/#{@repo}/releases/assets/#{asset_id}")
+    req = Net::HTTP::Get.new(uri)
+    req['Accept'] = 'application/octet-stream'
+    req['Authorization'] = "token #{@github_token}"
+
+    res = Net::HTTP.start(uri.hostname, uri.port, :use_ssl => uri.scheme == 'https') do |http|
+      http.request(req)
+    end
+
+    res['location']
   end
 
   private
 
-  def _fetch(url:, resolved_url:, timeout:)
+  def _fetch(url:, resolved_url:)
     # HTTP request header `Accept: application/octet-stream` is required.
     # Without this, the GitHub API will respond with metadata, not binary.
-    curl_download download_url, "--header", "Accept: application/octet-stream", "--header", "Authorization: token #{@github_token}", to: temporary_path
+    curl_download download_url, "--header", "Accept: application/octet-stream", to: temporary_path
   end
 
   def asset_id
@@ -139,7 +116,7 @@ class GitHubPrivateRepositoryReleaseDownloadStrategy < GitHubPrivateRepositoryDo
 
   def fetch_release_metadata
     release_url = "https://api.github.com/repos/#{@owner}/#{@repo}/releases/tags/#{@tag}"
-    GitHub::API.open_rest(release_url)
+    GitHub.open_api(release_url)
   end
 end
 
@@ -155,6 +132,8 @@ end
 #     ...
 class ScpDownloadStrategy < AbstractFileDownloadStrategy
   def initialize(url, name, version, **meta)
+    odisabled("ScpDownloadStrategy",
+      "a vendored ScpDownloadStrategy in your own formula or tap (using require_relative)")
     super
     parse_url_pattern
   end
@@ -168,7 +147,7 @@ class ScpDownloadStrategy < AbstractFileDownloadStrategy
     _, @user, @host, @port, @path = *@url.match(url_pattern)
   end
 
-  def fetch
+  def fetch(timeout: nil)
     ohai "Downloading #{@url}"
 
     if cached_location.exist?
@@ -196,17 +175,15 @@ end
 class DownloadStrategyDetector
   class << self
     module Compat
-      def detect(url, using = nil)
-        strategy = super
-        require_aws_sdk if strategy == S3DownloadStrategy
-        strategy
-      end
-
       def detect_from_url(url)
         case url
         when %r{^s3://}
+          odisabled("s3://",
+            "a vendored S3DownloadStrategy in your own formula or tap (using require_relative)")
           S3DownloadStrategy
         when %r{^scp://}
+          odisabled("scp://",
+            "a vendored ScpDownloadStrategy in your own formula or tap (using require_relative)")
           ScpDownloadStrategy
         else
           super(url)
@@ -216,12 +193,21 @@ class DownloadStrategyDetector
       def detect_from_symbol(symbol)
         case symbol
         when :github_private_repo
+          odisabled(":github_private_repo",
+            "a vendored GitHubPrivateRepositoryDownloadStrategy in your own formula or tap (using require_relative)")
           GitHubPrivateRepositoryDownloadStrategy
         when :github_private_release
+          odisabled(":github_private_repo",
+            "a vendored GitHubPrivateRepositoryReleaseDownloadStrategy in your own formula or tap "\
+            "(using require_relative)")
           GitHubPrivateRepositoryReleaseDownloadStrategy
         when :s3
+          odisabled(":s3",
+            "a vendored S3DownloadStrategy in your own formula or tap (using require_relative)")
           S3DownloadStrategy
         when :scp
+          odisabled(":scp",
+            "a vendored ScpDownloadStrategy in your own formula or tap (using require_relative)")
           ScpDownloadStrategy
         else
           super(symbol)
