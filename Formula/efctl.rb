@@ -21,6 +21,7 @@ class Efctl < Formula
 
     # Homebrew requires tests.
     test do
-        assert_match "efctl version 0.0.3", shell_output("#{bin}/efctl -v", 2)
+        # assert_match "efctl version 0.0.3", shell_output("#{bin}/efctl -v", 2)
+        system "false"
     end
 end
