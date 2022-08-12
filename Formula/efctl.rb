@@ -16,7 +16,7 @@ class Efctl < Formula
         build
         release "0.0.3"
 
-        bin.install (OS.linux? ? dist/bin/0.0.3/"efctl-linux" : dist/bin/0.0.3/"efctl-macos") => efctl
+        bin.install (OS.linux? ? "dist/bin/0.0.3/efctl-linux" : "dist/bin/0.0.3/efctl-macos") => efctl
     end
 
     # Homebrew requires tests.
