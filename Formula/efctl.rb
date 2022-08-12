@@ -1,4 +1,5 @@
 require "language/node"
+require_relative "lib/custom_download_strategy"
 
 class Efctl < Formula
     desc "CLI to use EdgeForge"
