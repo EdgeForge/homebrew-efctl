@@ -1,4 +1,4 @@
-require "formula"
+require "language/node"
 
 class Efctl < Formula
     desc "CLI to use EdgeForge"
@@ -7,8 +7,16 @@ class Efctl < Formula
     sha256 "87f51fdd64c3e8895ec4dd7c09d06f53dc9b3d36fe5d3b4bb9f62805b990903d"
     head "https://github.com/EdgeForge/efctl.git"
 
+    depends_on "node" => :build
+
     def install
-        bin.install "efctl"
+
+        system "npm", "install", *Language::Node.local_npm_install_args
+        source "./init.sh"
+        build
+        release "0.0.3"
+
+        bin.install (OS.linux? ? dist/bin/0.0.3/"efctl-linux" : dist/bin/0.0.3/"efctl-macos") => efctl
     end
 
     # Homebrew requires tests.
