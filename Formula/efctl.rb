@@ -15,8 +15,10 @@ class Efctl < Formula
         source "./init.sh"
         build
         release "0.0.3"
-
-        bin.install (OS.linux? ? "dist/bin/0.0.3/efctl-linux" : "dist/bin/0.0.3/efctl-macos") => efctl
+        
+        chdir "dist\bin\0.0.3" do
+            bin.install (OS.linux? ? "efctl-linux" : "efctl-macos") => efctl
+        end
     end
 
     # Homebrew requires tests.
